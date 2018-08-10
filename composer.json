@@ -4,7 +4,6 @@
     "type": "library",
     "require": {
         "symfony/yaml": "^4.1",
-        "aldarien/config": "^1.0",
         "danielstjules/stringy": "^3.1"
     },
     "require-dev": {
@@ -20,9 +19,6 @@
 	"autoload": {
 		"psr-4": {
 			"App\\": "app"
-		},
-		"files": [
-			"app/Helper/functions.php"
-		]
+		}
 	}
 }

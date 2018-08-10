@@ -4,19 +4,30 @@ namespace App\Service;
 use Stringy\Stringy;
 
 use App\Facade\YamlWrapper;
+use App\Exception\InvalidConfiguration as InvalidConfigurationException;
 
 class Migrator
 {
   protected $created;
-  protected $namespace;
+  protected $configuration;
 
-  public function __construct($namespace)
+  public function __construct($configuration)
   {
     $this->created = false;
-	$this->{"namespace"} = $namespace;
+    $this->configuration = $configuration;
+    $this->checkConfiguration();
     if (!$this->checkMigrations()) {
       $this->createMigrations();
       $this->created = true;
+    }
+  }
+  public function checkConfiguration()
+  {
+    $fields = ['root', 'src', 'location', 'namespace'];
+    foreach ($fields as $field) {
+      if (!isset($this->configuration[$field])) {
+        throw new InvalidConfigurationException($field . ' is not set in configuration for Migrator');
+      }
     }
   }
   public function created()
@@ -28,7 +39,7 @@ class Migrator
     if (!$this->checkMigrations()) {
       return false;
     }
-    $migrations = glob(config('locations.migrations') . '/*.*');
+    $migrations = glob($this->configuration['location'] . '/*.*');
     foreach ($migrations as &$migration) {
       $migration = basename($migration);
     }
@@ -51,11 +62,11 @@ class Migrator
           case 'json':
             $data = $this->migrateJSON($migration);
             break;
-		  case 'yaml':
-			$migration = str_replace('yaml', 'yml', $migration);
-		  case 'yml':
-			$data = $this->migrateYAML($migration);
-			break;
+    		  case 'yaml':
+            $migration = str_replace('yaml', 'yml', $migration);
+    		  case 'yml':
+    			  $data = $this->migrateYAML($migration);
+    			  break;
         }
 
         $this->execute($data);
@@ -108,7 +119,7 @@ class Migrator
   }
   protected function rollbackJSON($filename)
   {
-    $data = json_decode(file_get_contents(config('locations.migrations') . '/' . $filename));
+    $data = json_decode(file_get_contents($this->configuration['location'] . '/' . $filename));
     $data->action = 'drop';
     unset($data->columns);
     return $data;
@@ -134,7 +145,7 @@ class Migrator
   }
   public function checkMigrations()
   {
-    $migrations = glob(config('locations.migrations') . '/*.*');
+    $migrations = glob($this->configuration['location'] . '/*.*');
     if (count($migrations) == 0) {
       return false;
     }
@@ -142,19 +153,19 @@ class Migrator
   }
   public function createMigrations()
   {
-    $n = count(glob(config('locations.migrations') . '/*.*'));
+    $n = count(glob($this->configuration['location'] . '/*.*'));
     $i = $n + 1;
-    $files = glob(root() . '/src/*.php');
+    $files = glob($this->configuration['src'] . '/*.php');
     foreach ($files as $file) {
       $info = pathinfo($file);
-      $class = $this->{"namespace"} . Stringy::create($info['filename'])->removeRight('.php')->upperCamelize();
+      $class = $this->configuration["namespace"] . Stringy::create($info['filename'])->removeRight('.php')->upperCamelize();
       $properties = $this->getProperties($class);
       $migration = $this->createTable($class, $properties);
       $filename = str_pad($i, 5, '0', \STR_PAD_LEFT) . '_migration_create_' . $migration->table . '.json';
       $data = json_encode($migration, \JSON_PRETTY_PRINT);
       $i ++;
-      file_put_contents(config('locations.migrations') . '/' . $filename, $data);
-      chmod(config('locations.migrations') . '/' . $filename, 'a+rx');
+      file_put_contents($this->configuration['location'] . '/' . $filename, $data);
+      chmod($this->configuration['location'] . '/' . $filename, 'a+rx');
     }
   }
   protected function getProperties($class_name)
@@ -227,7 +238,7 @@ class Migrator
     $ref = new \ReflectionClass($class);
     $table = $ref->getStaticPropertyValue('_table', null);
     if ($table == null) {
-      $table = '' . Stringy::create($class)->removeLeft($this->{"namespace"})->underscored()->append('s');
+      $table = '' . Stringy::create($class)->removeLeft($this->configuration["namespace"])->underscored()->append('s');
     }
     $output = (object) ['table' => $table, 'columns' => $properties, 'action' => 'create'];
     return $output;
@@ -246,12 +257,12 @@ class Migrator
   }
   protected function migrateJSON($migration)
   {
-    $data = json_decode(file_get_contents(root() . '/' . $migration));
+    $data = json_decode(file_get_contents($this->configuration['root'] . '/' . $migration));
     return $data;
   }
   protected function migrateYAML($migration)
   {
-  	$data = YamlWrapper::load(config('locations.migrations') . '/' . $migration);
+  	$data = YamlWrapper::load($this->configuration['location'] . '/' . $migration);
   	return $this->YAMLToObject($data);
   }
   protected function YAMLToObject($data)
@@ -270,12 +281,17 @@ class Migrator
 	  }
 	  return $data;
   }
-  protected function parseCreate($data)
+  protected function prefix()
   {
     $prefix = '';
-    if (config('databases.mysql.prefix') != null) {
-      $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
+    if ($this->configuration['prefix'] != null) {
+      $prefix = '' . Stringy::create($this->configuration['databases.mysql.prefix'])->replace('\\', '')->underscored()->append('_');
     }
+    return $prefix;
+  }
+  protected function parseCreate($data)
+  {
+    $prefix = $this->prefix();
     $q = "CREATE TABLE " . $prefix . $data->table . " (";
     $primary = [];
     $foreign = [];
@@ -302,11 +318,11 @@ class Migrator
         $primary []= $column->name;
       }
       if ($column->foreign != null and is_string($column->foreign)) {
-        $class = $this->{"namespace"} . $column->foreign;
+        $class = $this->configuration["namespace"] . $column->foreign;
         $ref = new \ReflectionClass($class);
         $table = $ref->getStaticPropertyValue('_table', null);
         if ($table == null) {
-          $table = '' . Stringy::create($class)->removeLeft($this->{"namespace"})->underscored()->append('s');
+          $table = '' . Stringy::create($class)->removeLeft($this->configuration['namespace'])->underscored()->append('s');
         }
         $foreign []= (object) ['key' => $column->name, 'references' => $table, 'fkey' => 'id'];
       }
@@ -332,10 +348,7 @@ class Migrator
   }
   protected function parseDrop($data)
   {
-    $prefix = '';
-    if (config('databases.mysql.prefix') != null) {
-      $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
-    }
+    $prefix = $this->prefix();
     $q = "DROP TABLE " . $prefix . $data->table;
     return $q;
   }
