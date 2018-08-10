@@ -3,12 +3,17 @@ namespace App\Service;
 
 use Stringy\Stringy;
 
-class DBMigrator
+use App\Facade\YamlWrapper;
+
+class Migrator
 {
   protected $created;
-  public function __construct()
+  protected $namespace;
+  
+  public function __construct($namespace)
   {
     $this->created = false;
+	$this->{"namespace"} = $namespace;
     if (!$this->checkMigrations()) {
       $this->createMigrations();
       $this->created = true;
@@ -23,7 +28,7 @@ class DBMigrator
     if (!$this->checkMigrations()) {
       return false;
     }
-    $migrations = glob(root() . '/databases/migrations/*.*');
+    $migrations = glob(config('locations.migrations') . '/*.*');
     foreach ($migrations as &$migration) {
       $migration = basename($migration);
     }
@@ -103,7 +108,7 @@ class DBMigrator
   }
   protected function rollbackJSON($filename)
   {
-    $data = json_decode(file_get_contents(root() . '/databases/migrations/' . $filename));
+    $data = json_decode(file_get_contents(config('locations.migrations') . '/' . $filename));
     $data->action = 'drop';
     unset($data->columns);
     return $data;
@@ -129,7 +134,7 @@ class DBMigrator
   }
   public function checkMigrations()
   {
-    $migrations = glob(root() . '/databases/migrations/*.*');
+    $migrations = glob(config('locations.migrations') . '/*.*');
     if (count($migrations) == 0) {
       return false;
     }
@@ -137,19 +142,19 @@ class DBMigrator
   }
   public function createMigrations()
   {
-    $n = count(glob(root() . '/databases/migrations/*.*'));
+    $n = count(glob(config('locations.migrations') . '/*.*'));
     $i = $n + 1;
     $files = glob(root() . '/src/*.php');
     foreach ($files as $file) {
       $info = pathinfo($file);
-      $class = '\\Process\\' . Stringy::create($info['filename'])->removeRight('.php')->upperCamelize();
+      $class = $this->{"namespace"} . Stringy::create($info['filename'])->removeRight('.php')->upperCamelize();
       $properties = $this->getProperties($class);
       $migration = $this->createTable($class, $properties);
       $filename = str_pad($i, 5, '0', \STR_PAD_LEFT) . '_migration_create_' . $migration->table . '.json';
       $data = json_encode($migration, \JSON_PRETTY_PRINT);
       $i ++;
-      file_put_contents(root() . '/databases/migrations/' . $filename, $data);
-      chmod(root() . '/databases/migrations/' . $filename, 'a+rx');
+      file_put_contents(config('locations.migrations') . '/' . $filename, $data);
+      chmod(config('locations.migrations') . '/' . $filename, 'a+rx');
     }
   }
   protected function getProperties($class_name)
@@ -222,7 +227,7 @@ class DBMigrator
     $ref = new \ReflectionClass($class);
     $table = $ref->getStaticPropertyValue('_table', null);
     if ($table == null) {
-      $table = '' . Stringy::create($class)->removeLeft('\\Process\\')->underscored()->append('s');
+      $table = '' . Stringy::create($class)->removeLeft($this->{"namespace"})->underscored()->append('s');
     }
     $output = (object) ['table' => $table, 'columns' => $properties, 'action' => 'create'];
     return $output;
@@ -237,16 +242,35 @@ class DBMigrator
         $query = $this->parseDrop($data);
         break;
     }
+	var_dump($data, $query);
+	die();
     \ORM::getDb()->query($query);
   }
   protected function migrateJSON($migration)
   {
-    $data = json_decode(file_get_contents(root() . '/databases/migrations/' . $migration));
+    $data = json_decode(file_get_contents(root() . '/' . $migration));
     return $data;
   }
   protected function migrateYAML($migration)
   {
-	return YamlWrapper::load(root() . '/databases/migrations/' . $migration);
+	$data = YamlWrapper::load(config('locations.migrations') . '/' . $migration);
+	return $this->YAMLToObject($data);
+  }
+  protected function YAMLToObject($data)
+  {
+	  if (is_array($data)) {
+		  if (\is_assoc($data)) {
+			  $data = (object) $data;
+			  foreach ($data as $name => $value) {
+				  $data->{$name} = $this->YAMLToObject($value);
+			  }
+		  } else {
+			  foreach ($data as $i => $value) {
+				  $data[$i] = $this->YAMLToObject($value);
+			  }
+		  }
+	  }
+	  return $data;
   }
   protected function parseCreate($data)
   {
@@ -277,11 +301,11 @@ class DBMigrator
         $primary []= $column->name;
       }
       if ($column->foreign != null and is_string($column->foreign)) {
-        $class = '\\Process\\' . $column->foreign;
+        $class = $this->{"namespace"} . $column->foreign;
         $ref = new \ReflectionClass($class);
         $table = $ref->getStaticPropertyValue('_table', null);
         if ($table == null) {
-          $table = '' . Stringy::create($class)->removeLeft('\\Process\\')->underscored()->append('s');
+          $table = '' . Stringy::create($class)->removeLeft($this->{"namespace"})->underscored()->append('s');
         }
         $foreign []= (object) ['key' => $column->name, 'references' => $table, 'fkey' => 'id'];
       }
