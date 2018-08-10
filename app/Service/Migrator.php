@@ -9,7 +9,7 @@ class Migrator
 {
   protected $created;
   protected $namespace;
-  
+
   public function __construct($namespace)
   {
     $this->created = false;
@@ -242,9 +242,7 @@ class Migrator
         $query = $this->parseDrop($data);
         break;
     }
-	var_dump($data, $query);
-	die();
-    \ORM::getDb()->query($query);
+  	\ORM::getDb()->query($query);
   }
   protected function migrateJSON($migration)
   {
@@ -253,13 +251,13 @@ class Migrator
   }
   protected function migrateYAML($migration)
   {
-	$data = YamlWrapper::load(config('locations.migrations') . '/' . $migration);
-	return $this->YAMLToObject($data);
+  	$data = YamlWrapper::load(config('locations.migrations') . '/' . $migration);
+  	return $this->YAMLToObject($data);
   }
   protected function YAMLToObject($data)
   {
 	  if (is_array($data)) {
-		  if (\is_assoc($data)) {
+		  if (count(array_filter(array_keys($data), 'is_string')) > 0) {
 			  $data = (object) $data;
 			  foreach ($data as $name => $value) {
 				  $data->{$name} = $this->YAMLToObject($value);
@@ -274,7 +272,10 @@ class Migrator
   }
   protected function parseCreate($data)
   {
-    $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
+    $prefix = '';
+    if (config('databases.mysql.prefix') != null) {
+      $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
+    }
     $q = "CREATE TABLE " . $prefix . $data->table . " (";
     $primary = [];
     $foreign = [];
@@ -331,7 +332,10 @@ class Migrator
   }
   protected function parseDrop($data)
   {
-    $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
+    $prefix = '';
+    if (config('databases.mysql.prefix') != null) {
+      $prefix = '' . Stringy::create(config('databases.mysql.prefix'))->replace('\\', '')->underscored()->append('_');
+    }
     $q = "DROP TABLE " . $prefix . $data->table;
     return $q;
   }
