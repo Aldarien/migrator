@@ -57,19 +57,7 @@ class Migrator
     try {
       \ORM::getDb()->query('SET FOREIGN_KEY_CHECKS=0;');
       foreach ($execute as $migration) {
-        $info = pathinfo($migration);
-        switch ($info['extension']) {
-          case 'json':
-            $data = $this->migrateJSON($migration);
-            break;
-    		  case 'yaml':
-            $migration = str_replace('yaml', 'yml', $migration);
-    		  case 'yml':
-    			  $data = $this->migrateYAML($migration);
-    			  break;
-        }
-
-        $this->execute($data);
+        $this->migrateFile($this->configuration['location'] . '/' . $migration);
 
         $q = "INSERT INTO migrations (migration, date) VALUES (?, NOW())";
         $st = \ORM::getDb()->prepare($q);
@@ -81,6 +69,14 @@ class Migrator
       \ORM::getDb()->rollBack();
       throw $e;
     }
+    if (isset($this->configuration['seed_files']) and $this->configuration['seed_files'] != null) {
+      $this->seed();
+    }
+  }
+  protected function migrateFile($filename)
+  {
+    $data = $this->getFile($filename);
+    $this->execute($data);
   }
   public function rollback()
   {
@@ -93,7 +89,7 @@ class Migrator
     try {
       \ORM::getDb()->query('SET FOREIGN_KEY_CHECKS=0;');
       foreach ($executed as $migration) {
-        $filename = $migration->migration;
+        $filename = $this->configuration['location'] . '/' . $migration->migration;
         $this->rollbackFile($filename);
 
         $q = "DELETE FROM migrations WHERE migration=?";
@@ -109,20 +105,10 @@ class Migrator
   }
   protected function rollbackFile($filename)
   {
-    $info = pathinfo($filename);
-    switch ($info['extension']) {
-      case 'json':
-        $data = $this->rollbackJSON($filename);
-        break;
-    }
-    $this->execute($data);
-  }
-  protected function rollbackJSON($filename)
-  {
-    $data = json_decode(file_get_contents($this->configuration['location'] . '/' . $filename));
+    $data = $this->getFile($filename);
     $data->action = 'drop';
     unset($data->columns);
-    return $data;
+    $this->execute($data);
   }
   public function checkTableMigration()
   {
@@ -252,17 +238,40 @@ class Migrator
       case 'drop':
         $query = $this->parseDrop($data);
         break;
+      case 'insert':
+        list($query, $values) = $this->parseInsert($data);
+        break;
     }
-  	\ORM::getDb()->query($query);
+    if (isset($values)) {
+      $st = \ORM::getDb()->prepare($query);
+      $st->execute($values);
+    } else {
+      \ORM::getDb()->query($query);
+    }
   }
-  protected function migrateJSON($migration)
+  protected function getFile($filename)
   {
-    $data = json_decode(file_get_contents($this->configuration['root'] . '/' . $migration));
+    $info = pathinfo($filename);
+    switch ($info['extension']) {
+      case 'json':
+        $data = $this->loadJSON($filename);
+        break;
+      case 'yaml':
+        $filename = str_replace('yaml', 'yml', $filename);
+      case 'yml':
+        $data = $this->loadYAML($filename);
+        break;
+    }
     return $data;
   }
-  protected function migrateYAML($migration)
+  protected function loadJSON($filename)
   {
-  	$data = YamlWrapper::load($this->configuration['location'] . '/' . $migration);
+    $data = json_decode(file_get_contents($filename));
+    return $data;
+  }
+  protected function loadYAML($filename)
+  {
+  	$data = YamlWrapper::load($filename);
   	return $this->YAMLToObject($data);
   }
   protected function YAMLToObject($data)
@@ -351,5 +360,57 @@ class Migrator
     $prefix = $this->prefix();
     $q = "DROP TABLE " . $prefix . $data->table;
     return $q;
+  }
+  protected function parseInsert($data)
+  {
+    $prefix = $this->prefix();
+    $q = "INSERT INTO " . $prefix . $data->table;
+    $fields = $this->getFields($data);
+    $q .= ' (' . implode(', ', $fields) . ')';
+    $q .= " VALUES ";
+    $insert = [];
+    foreach ($data->values as $i => $values) {
+      if ($i > 0) {
+        $q .= ', ';
+      }
+      $q .= '(';
+      foreach ($fields as $c => $field) {
+        if ($c > 0) {
+          $q .= ', ';
+        }
+        $q .= '?';
+        if (isset($values->$field)) {
+          $insert []= $values->$field;
+        } else {
+          $insert []= '';
+        }
+      }
+      $q .= ')';
+    }
+    return [$q, $insert];
+  }
+  protected function getFields($data)
+  {
+    $fields = [];
+    foreach ($data->values as $values) {
+      foreach ($values as $field => $value) {
+        if (array_search($field, $fields) === false) {
+          $fields []= $field;
+        }
+      }
+    }
+    return $fields;
+  }
+  public function seed()
+  {
+    $files = glob($this->configuration['seed_files'] . '/*.*');
+    foreach ($files as $filename) {
+      $this->seedFile($filename);
+    }
+  }
+  public function seedFile($filename)
+  {
+    $data = $this->getFile($filename);
+    $this->execute($data);
   }
 }
